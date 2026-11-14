@@ -1,16 +1,19 @@
 name: Controllo appuntamenti Pietrasanta
-on:
+'on':
   schedule:
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       diagnostic:
-        description: 'Produci screenshot e testo per collaudo (senza notifiche di slot)'
+        description: 'Diagnostica senza notifiche (true / false)'
         required: false
         type: boolean
         default: false
 permissions:
   contents: read
+concurrency:
+  group: pietrasanta-monitor
+  cancel-in-progress: false
 jobs:
   controllo:
     runs-on: ubuntu-latest
@@ -26,32 +29,33 @@ jobs:
           cache: 'pip'
       - run: pip install -r requirements.txt
       - run: python -m playwright install --with-deps chromium
-      - name: Ripristina stato rilevazioni
+      - name: Ripristina rilevazioni precedenti
         uses: actions/cache/restore@v4
         with:
           path: stato.json
           key: pietrasanta-stato-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             pietrasanta-stato-
-      - name: Esegui controllo
+      - name: Esegui controllo o diagnostica
+        shell: bash
+        env:
+          DIAGNOSTIC: ${{ inputs.diagnostic }}
         run: |
-          if [ "${{ inputs.diagnostic }}" = "true" ]; then
+          if [ "$DIAGNOSTIC" = "true" ]; then
             python monitor.py --diagnostic
           else
             python monitor.py --once
           fi
-      - name: Salva stato rilevazioni
+      - name: Conserva stato
         if: success() && inputs.diagnostic != true
         uses: actions/cache/save@v4
         with:
           path: stato.json
           key: pietrasanta-stato-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Scarica diagnostica dalla pagina Actions
+      - name: Scarica diagnostica
         if: always() && inputs.diagnostic == true
         uses: actions/upload-artifact@v4
         with:
           name: schermate-calendari
-          path: |
-            diagnostica/
-            monitor.log
+          path: diagnostica/
           retention-days: 3
