@@ -68,30 +68,67 @@ def diagnostic_save(page, name, prefix):
         logging.warning('Diagnostica parziale: %s', type(exc).__name__)
 
 
-def open_calendar(page, item):
+def open_calendar(page, item, diagnostic=False):
+    """Apri il calendario anche se il sito usa un nuovo tab o un link /book.
+
+    Conserva prove diagnostiche quando non riesce ad arrivare al calendario.
+    Non deduce mai uno slot dall'esistenza di un pulsante sulla pagina.
+    """
     page.goto(item['url'], wait_until='domcontentloaded', timeout=45000)
-    page.wait_for_timeout(1300)
+    page.wait_for_timeout(2500)
+    if diagnostic:
+        diagnostic_save(page, item['name'], 'pagina_servizio')
     if page.locator(CALENDAR).count():
-        return
-    # Apri il pulsante di prenotazione DEL servizio, non l'omonimo link nel footer.
-    for selector in [
+        return page
+
+    # Il sito puo' aprire il modulo di prenotazione in un'altra scheda.
+    # Ispezioniamo il link e il risultato del click, mantenendo il nuovo Page.
+    candidate_selectors = [
         'main a:has-text("Prenota appuntamento")',
         'main button:has-text("Prenota appuntamento")',
         'a:has-text("Prenota appuntamento")',
         'button:has-text("Prenota appuntamento")',
-    ]:
+    ]
+    errors = []
+    for selector in candidate_selectors:
         matches = page.locator(selector)
-        if not matches.count():
-            continue
-        try:
-            matches.first.click(timeout=8000)
-            page.locator(CALENDAR).first.wait_for(state='visible', timeout=15000)
-            return
-        except Exception:
-            if page.locator(CALENDAR).count():
-                return
-    # Nessun tentativo di indovinare orari da pagine puramente informative.
-    raise RuntimeError('Calendario non raggiunto: verificare URL e pulsante Prenota appuntamento')
+        for index in range(min(matches.count(), 4)):
+            element = matches.nth(index)
+            try:
+                if not element.is_visible():
+                    continue
+                # Non dare priorita' al link del footer quando e' disponibile
+                # il pulsante del contenuto principale.
+                href = element.get_attribute('href')
+                old_pages = list(page.context.pages)
+                if href and '/it/book' in href:
+                    target = urllib.parse.urljoin(page.url, href)
+                    page.goto(target, wait_until='domcontentloaded', timeout=45000)
+                else:
+                    element.click(timeout=8000)
+                page.wait_for_timeout(3000)
+                pages = [p for p in page.context.pages if not p.is_closed()]
+                new_pages = [p for p in pages if p not in old_pages]
+                candidates = new_pages + [page] + [p for p in pages if p is not page and p not in new_pages]
+                for candidate in candidates:
+                    try:
+                        candidate.wait_for_load_state('domcontentloaded', timeout=10000)
+                    except Exception:
+                        pass
+                    try:
+                        candidate.locator(CALENDAR).first.wait_for(state='visible', timeout=7000)
+                        logging.info('%s: calendario raggiunto su %s', item['name'], candidate.url)
+                        return candidate
+                    except Exception:
+                        if diagnostic:
+                            diagnostic_save(candidate, item['name'], 'dopo_click')
+                errors.append(selector + ': calendario non apparso; URL ' + page.url)
+            except Exception as exc:
+                errors.append(selector + ': ' + type(exc).__name__)
+    # Acquisisci prove utili anche se il click non e' riuscito.
+    diagnostic_save(page, item['name'], 'errore_navigazione')
+    logging.error('%s: tentativi navigazione: %s', item['name'], ' | '.join(errors)[:1500])
+    raise RuntimeError('Calendario non raggiunto: consultare screenshot e testo diagnostici')
 
 
 def enabled_dates(page):
@@ -156,7 +193,7 @@ def visible_times(page):
 def scan(browser, item, diagnostic=False, max_months=2):
     page = browser.new_page(locale='it-IT', timezone_id='Europe/Rome')
     try:
-        open_calendar(page, item)
+        page = open_calendar(page, item, diagnostic=diagnostic)
         if diagnostic:
             diagnostic_save(page, item['name'], 'inizio')
         slots = set()
