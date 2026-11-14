@@ -68,26 +68,64 @@ def diagnostic_save(page, name, prefix):
         logging.warning('Diagnostica parziale: %s', type(exc).__name__)
 
 
+def cookie_visible(page):
+    """Rileva il vero dialogo CookieScript, non gli elementi nascosti nel DOM."""
+    try:
+        return bool(page.evaluate("""() => {
+          const visible = el => !!(el && el.getClientRects().length &&
+            getComputedStyle(el).visibility !== 'hidden' &&
+            getComputedStyle(el).display !== 'none');
+          return [...document.querySelectorAll('[id^="cookiescript_injected"], [aria-label="Cookie consent dialog"]')]
+            .some(el => visible(el) && (el.innerText || '').includes('RIFIUTA TUTTO'));
+        }"""))
+    except Exception:
+        return False
+
+
 def dismiss_cookie_banner(page):
-    """Rifiuta i cookie opzionali; non modifica impostazioni di prenotazione."""
+    """Rifiuta solo cookie opzionali e verifica che il dialogo sparisca."""
+    if not cookie_visible(page):
+        return True
     selectors = [
+        '#cookiescript_reject',
+        '[id*="cookiescript"] button:has-text("RIFIUTA TUTTO")',
+        '[id*="cookiescript"] a:has-text("RIFIUTA TUTTO")',
         'button:has-text("RIFIUTA TUTTO")',
         'a:has-text("RIFIUTA TUTTO")',
         'text="RIFIUTA TUTTO"',
-        'button:has-text("Rifiuta tutto")',
     ]
-    for selector in selectors:
+    for sel in selectors:
         try:
-            button = page.locator(selector).first
-            if button.count() and button.is_visible():
-                button.click(timeout=3500)
-                page.wait_for_timeout(600)
-                if not page.get_by_text('Questo sito web utilizza cookie').is_visible():
-                    return True
+            loc = page.locator(sel).first
+            if not loc.count() or not loc.is_visible():
+                continue
+            loc.click(timeout=2500)
+            page.wait_for_timeout(450)
+            if not cookie_visible(page):
+                logging.info('Banner cookie chiuso tramite %s', sel)
+                return True
         except Exception:
-            continue
-    # La X visibile in alto sul banner e' un'ulteriore opzione di chiusura.
-    # Non usare click su coordinate fisse o forzati: potrebbero interagire col modulo.
+            pass
+    # Ultimo tentativo mirato: un click DOM esclusivamente sull'elemento
+    # visibile con testo esatto RIFIUTA TUTTO, mai sul modulo di prenotazione.
+    try:
+        clicked = page.evaluate("""() => {
+          const v = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+          const elems = [...document.querySelectorAll('button,a,[role="button"],div')];
+          const target = elems.find(e => v(e) && e.children.length === 0 &&
+             (e.textContent || '').trim().toUpperCase() === 'RIFIUTA TUTTO' &&
+             (e.closest('[id*="cookiescript"]') || e.id?.includes('cookiescript')));
+          if (!target) return false;
+          target.click(); return true;
+        }""")
+        if clicked:
+            page.wait_for_timeout(800)
+            if not cookie_visible(page):
+                logging.info('Banner cookie chiuso mediante pulsante DOM verificato')
+                return True
+    except Exception:
+        pass
+    logging.warning('Banner cookie ancora visibile: dialogo non chiuso')
     return False
 
 
@@ -107,8 +145,11 @@ def wait_calendar_or_explain(page, item, diagnostic=False):
             calendarDayCount: document.querySelectorAll('button.mat-calendar-body-cell').length,
             visibleText: (document.querySelector('main')?.innerText || document.body.innerText).slice(0,2200),
             iframeCount: document.querySelectorAll('iframe').length,
-            cookieBannerCount: document.querySelectorAll('[id*=cookiescript]').length
+            cookieBannerCount: document.querySelectorAll('[id*=cookiescript]').length,
+            cookieVisible: [...document.querySelectorAll('[id^=cookiescript_injected]')].some(e => !!e.getClientRects().length && (e.innerText || '').includes('RIFIUTA TUTTO'))
         })""")
+        info['cookieCloseRetry'] = dismiss_cookie_banner(page)
+        info['cookieStillVisible'] = cookie_visible(page)
         folder = ROOT / 'diagnostica'
         folder.mkdir(exist_ok=True)
         slug = re.sub('[^A-Za-z0-9_-]+', '_', item['name'])[:80]
