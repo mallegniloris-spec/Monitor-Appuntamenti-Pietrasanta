@@ -69,22 +69,71 @@ def diagnostic_save(page, name, prefix):
 
 
 def dismiss_cookie_banner(page):
-    """Chiude il banner cookie con rifiuto dei cookie facoltativi."""
-    for selector in [
+    """Rifiuta i cookie opzionali; non modifica impostazioni di prenotazione."""
+    selectors = [
         'button:has-text("RIFIUTA TUTTO")',
-        'button:has-text("Rifiuta tutto")',
+        'a:has-text("RIFIUTA TUTTO")',
         'text="RIFIUTA TUTTO"',
-    ]:
+        'button:has-text("Rifiuta tutto")',
+    ]
+    for selector in selectors:
         try:
             button = page.locator(selector).first
             if button.count() and button.is_visible():
-                button.click(timeout=5000)
-                page.wait_for_timeout(400)
-                return True
+                button.click(timeout=3500)
+                page.wait_for_timeout(600)
+                if not page.get_by_text('Questo sito web utilizza cookie').is_visible():
+                    return True
         except Exception:
             continue
+    # La X visibile in alto sul banner e' un'ulteriore opzione di chiusura.
+    # Non usare click su coordinate fisse o forzati: potrebbero interagire col modulo.
     return False
 
+
+def booking_stage(page):
+    """Fase riconosciuta dal contenuto visibile, non dal riepilogo dei passi."""
+    try:
+        if calendar_ready(page):
+            return 'calendario'
+        body = page.locator('body').inner_text(timeout=9000)
+        if 'Scegli il motivo dell’appuntamento' in body or 'Scegli il motivo dell\'appuntamento' in body:
+            return 'motivo'
+        if 'Scegli l’ufficio a cui vuoi richiedere l’appuntamento' in body or 'Scegli l\'ufficio a cui vuoi richiedere l\'appuntamento' in body:
+            return 'ufficio'
+        if 'Richiedente' in body and ('Nome*' in body or 'Cognome*' in body):
+            return 'richiedente'
+    except Exception:
+        pass
+    return 'sconosciuto'
+
+
+def diagnostic_controls(page, name, stage):
+    folder = ROOT / 'diagnostica'
+    folder.mkdir(exist_ok=True)
+    slug = re.sub('[^A-Za-z0-9_-]+', '_', name)[:80]
+    try:
+        data = page.evaluate("""() => ({
+            url: location.href,
+            title: document.title,
+            buttons: [...document.querySelectorAll('button')].map(x => ({
+                text: (x.innerText || x.getAttribute('aria-label') || '').trim().slice(0,140),
+                disabled: x.disabled, visible: !!(x.offsetWidth || x.offsetHeight || x.getClientRects().length),
+                html: x.outerHTML.slice(0,850)
+            })).filter(x => x.visible),
+            radios: [...document.querySelectorAll('input[type=radio]')].map(x => ({
+                checked: x.checked, disabled: x.disabled, value: x.value,
+                label: x.closest('mat-radio-button')?.innerText?.slice(0,130) || ''
+            })),
+            fields: [...document.querySelectorAll('textarea,input:not([type=hidden])')].map(x => ({
+                tag: x.tagName, type: x.type, required: x.required, disabled: x.disabled,
+                placeholder: x.placeholder, 'aria-invalid': x.getAttribute('aria-invalid')
+            })),
+            invalidElements: [...document.querySelectorAll('[aria-invalid=true],.mat-mdc-form-field-error,.mat-error')].map(x => x.innerText.slice(0,200))
+        })""")
+        (folder / (slug + '_' + stage + '_controlli.json')).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+    except Exception as exc:
+        logging.warning('%s: impossibile salvare controlli %s: %s', name, stage, type(exc).__name__)
 
 def calendar_ready(page):
     try:
@@ -94,46 +143,55 @@ def calendar_ready(page):
 
 
 def advance_booking_steps(page, item, diagnostic=False):
-    """Passa da /it/book a 'Data e orario' senza compilare o inviare moduli.
-
-    Le pagine diagnostiche mostrano 'Luogo' con ufficio gia' selezionato,
-    pulsante 'Avanti', e una successiva fase 'Dettagli appuntamento'.
-    L'avanzamento richiede radio gia' selezionato o nessuna scelta obbligatoria.
-    """
-    for step in range(1, 4):
+    """Raggiunge Data e orario, senza avanzare oltre il calendario e senza prenotare."""
+    for step in range(1, 5):
         dismiss_cookie_banner(page)
         if calendar_ready(page):
             return page
+        stage_before = booking_stage(page)
         if diagnostic:
             diagnostic_save(page, item['name'], 'prenotazione_fase_' + str(step))
-        body = page.locator('body').inner_text(timeout=8000).lower()
-        if 'prenota un appuntamento' not in body and 'informazioni richieste' not in body:
-            raise RuntimeError('Procedura di prenotazione non riconosciuta: nessun avanzamento')
-        # Non procedere mai nella fase Richiedente, Riepilogo o conferma.
-        # La parola nel breadcrumb non basta: controlliamo campi personali reali.
-        if page.locator('input[autocomplete="given-name"], input[autocomplete="family-name"], input[type="email"]').count():
-            raise RuntimeError('Raggiunto il modulo richiedente senza calendario: interrotto per sicurezza')
-        radio = page.locator('input[type="radio"]')
-        if radio.count() and not page.locator('input[type="radio"]:checked').count():
-            raise RuntimeError('Nessuna opzione selezionata nella fase ' + str(step) + ': controllo manuale necessario')
-        buttons = page.get_by_role('button', name=re.compile(r'^\s*Avanti\s*$', re.I))
-        chosen = None
-        for i in range(min(buttons.count(), 8)):
-            candidate = buttons.nth(i)
-            if candidate.is_visible() and candidate.is_enabled():
-                chosen = candidate
-                break
-        if chosen is None:
-            raise RuntimeError('Pulsante Avanti non disponibile nella fase ' + str(step))
-        chosen.click(timeout=8000)
-        page.wait_for_timeout(2000)
-        logging.info('%s: avanzamento prenotazione fase %d, URL %s', item['name'], step, page.url)
+            diagnostic_controls(page, item['name'], 'fase_' + str(step))
+        logging.info('%s: passaggio %d, fase %s', item['name'], step, stage_before)
+        if stage_before == 'richiedente':
+            raise RuntimeError('Fase richiedente raggiunta senza calendario: nessun dato inserito')
+        if stage_before not in ('ufficio','motivo'):
+            raise RuntimeError('Fase prenotazione non riconosciuta: ' + stage_before)
+
+        if stage_before == 'motivo':
+            radios = page.locator('input[type="radio"]')
+            if radios.count() and not page.locator('input[type="radio"]:checked').count():
+                raise RuntimeError('Motivo non selezionato: controllare il servizio')
+            # Dettagli potrebbero essere soggetti a validazione anche senza asterisco.
+            # Non inventiamo contenuti: la diagnostica rilevera' gli errori del modulo.
+        elif stage_before == 'ufficio':
+            radios = page.locator('input[type="radio"]')
+            if radios.count() and not page.locator('input[type="radio"]:checked').count():
+                raise RuntimeError('Ufficio non selezionato: selezione manuale richiesta')
+
+        candidates = page.get_by_role('button', name=re.compile(r'^\s*Avanti\s*$', re.I))
+        enabled = [candidates.nth(i) for i in range(min(candidates.count(),10))
+                   if candidates.nth(i).is_visible() and candidates.nth(i).is_enabled()]
+        if not enabled:
+            raise RuntimeError('Pulsante Avanti mancante o disabilitato alla fase ' + stage_before)
+        try:
+            enabled[-1].click(timeout=10000)
+        except Exception:
+            if diagnostic:
+                diagnostic_controls(page,item['name'],'click_bloccato_'+str(step))
+            raise
+        page.wait_for_timeout(1800)
+        dismiss_cookie_banner(page)
         if diagnostic:
             diagnostic_save(page, item['name'], 'dopo_avanti_' + str(step))
+            diagnostic_controls(page, item['name'], 'dopo_avanti_' + str(step))
         if calendar_ready(page):
             return page
-    raise RuntimeError('Calendario non raggiunto dopo tre fasi: controllare diagnostica')
-
+        stage_after = booking_stage(page)
+        logging.info('%s: passaggio %d, da %s a %s', item['name'], step, stage_before, stage_after)
+        if stage_after == stage_before:
+            raise RuntimeError('Il pulsante Avanti non cambia fase ('+stage_before+'); analizzare *_controlli.json per errori di validazione')
+    raise RuntimeError('Calendario non raggiunto: controllare files diagnostici')
 
 def open_calendar(page, item, diagnostic=False):
     """Apre il calendario partendo dalla pagina servizio, seguendo /it/book."""
