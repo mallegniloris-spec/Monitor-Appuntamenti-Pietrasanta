@@ -2,12 +2,65 @@
   "months": 2,
   "days_ahead": 45,
   "services": [
-    {"name": "Riccardo Nastasi - SCIA", "risorsa_id": 1719, "servizio_id": 768, "minutes": 20, "enabled": true},
-    {"name": "Ilaria Sacchelli - SCIA e sanatorie", "risorsa_id": 1715, "servizio_id": 767, "minutes": 20, "enabled": true},
-    {"name": "Matteo Genovesi - PDC e sanatorie", "risorsa_id": 1714, "servizio_id": 766, "minutes": 20, "enabled": true},
-    {"name": "Maurizio Viviani - Edilizia residenziale", "risorsa_id": 1725, "servizio_id": 901, "minutes": 20, "enabled": true},
-    {"name": "Alessandro Dazzi - Edilizia e paesaggistica", "risorsa_id": 1710, "servizio_id": 764, "minutes": 20, "enabled": true},
-    {"name": "Ilaria Natucci - Attivita produttive", "risorsa_id": 1720, "servizio_id": 769, "minutes": 20, "enabled": true},
-    {"name": "Alessia Pardini - Edilizia e sanatorie", "risorsa_id": 1711, "servizio_id": 765, "minutes": 20, "enabled": true}
+    {
+      "name": "Riccardo Nastasi - SCIA",
+      "risorsa_id": 1719,
+      "servizio_id": 768,
+      "minutes": 20,
+      "enabled": true
+    },
+    {
+      "name": "Ilaria Sacchelli - SCIA e sanatorie",
+      "risorsa_id": 1715,
+      "servizio_id": 767,
+      "minutes": 20,
+      "enabled": true
+    },
+    {
+      "name": "Matteo Genovesi - PDC e sanatorie",
+      "risorsa_id": 1714,
+      "servizio_id": 766,
+      "minutes": 20,
+      "enabled": true
+    },
+    {
+      "name": "Maurizio Viviani - Edilizia residenziale",
+      "risorsa_id": 1725,
+      "servizio_id": 901,
+      "minutes": 20,
+      "enabled": true
+    },
+    {
+      "name": "Alessandro Dazzi - Edilizia e paesaggistica",
+      "risorsa_id": 1710,
+      "servizio_id": 764,
+      "minutes": 20,
+      "enabled": true
+    },
+    {
+      "name": "Ilaria Natucci - Attivita produttive",
+      "risorsa_id": 1720,
+      "servizio_id": 769,
+      "minutes": 20,
+      "enabled": true
+    },
+    {
+      "name": "Alessia Pardini - Edilizia e sanatorie",
+      "risorsa_id": 1711,
+      "servizio_id": 765,
+      "minutes": 20,
+      "enabled": true
+    }
+  ],
+  "planning_office_id": 8722,
+  "planning_staff": [
+    {
+      "name": "Benedetta Matteini",
+      "enabled": true
+    },
+    {
+      "name": "Caterina Caffarri",
+      "enabled": true
+    }
   ]
 }
