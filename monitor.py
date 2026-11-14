@@ -68,67 +68,130 @@ def diagnostic_save(page, name, prefix):
         logging.warning('Diagnostica parziale: %s', type(exc).__name__)
 
 
-def open_calendar(page, item, diagnostic=False):
-    """Apri il calendario anche se il sito usa un nuovo tab o un link /book.
+def dismiss_cookie_banner(page):
+    """Chiude il banner cookie con rifiuto dei cookie facoltativi."""
+    for selector in [
+        'button:has-text("RIFIUTA TUTTO")',
+        'button:has-text("Rifiuta tutto")',
+        'text="RIFIUTA TUTTO"',
+    ]:
+        try:
+            button = page.locator(selector).first
+            if button.count() and button.is_visible():
+                button.click(timeout=5000)
+                page.wait_for_timeout(400)
+                return True
+        except Exception:
+            continue
+    return False
 
-    Conserva prove diagnostiche quando non riesce ad arrivare al calendario.
-    Non deduce mai uno slot dall'esistenza di un pulsante sulla pagina.
+
+def calendar_ready(page):
+    try:
+        return page.locator(CALENDAR).first.is_visible(timeout=1500)
+    except Exception:
+        return False
+
+
+def advance_booking_steps(page, item, diagnostic=False):
+    """Passa da /it/book a 'Data e orario' senza compilare o inviare moduli.
+
+    Le pagine diagnostiche mostrano 'Luogo' con ufficio gia' selezionato,
+    pulsante 'Avanti', e una successiva fase 'Dettagli appuntamento'.
+    L'avanzamento richiede radio gia' selezionato o nessuna scelta obbligatoria.
     """
+    for step in range(1, 4):
+        dismiss_cookie_banner(page)
+        if calendar_ready(page):
+            return page
+        if diagnostic:
+            diagnostic_save(page, item['name'], 'prenotazione_fase_' + str(step))
+        body = page.locator('body').inner_text(timeout=8000).lower()
+        if 'prenota un appuntamento' not in body and 'informazioni richieste' not in body:
+            raise RuntimeError('Procedura di prenotazione non riconosciuta: nessun avanzamento')
+        # Non procedere mai nella fase Richiedente, Riepilogo o conferma.
+        # La parola nel breadcrumb non basta: controlliamo campi personali reali.
+        if page.locator('input[autocomplete="given-name"], input[autocomplete="family-name"], input[type="email"]').count():
+            raise RuntimeError('Raggiunto il modulo richiedente senza calendario: interrotto per sicurezza')
+        radio = page.locator('input[type="radio"]')
+        if radio.count() and not page.locator('input[type="radio"]:checked').count():
+            raise RuntimeError('Nessuna opzione selezionata nella fase ' + str(step) + ': controllo manuale necessario')
+        buttons = page.get_by_role('button', name=re.compile(r'^\s*Avanti\s*$', re.I))
+        chosen = None
+        for i in range(min(buttons.count(), 8)):
+            candidate = buttons.nth(i)
+            if candidate.is_visible() and candidate.is_enabled():
+                chosen = candidate
+                break
+        if chosen is None:
+            raise RuntimeError('Pulsante Avanti non disponibile nella fase ' + str(step))
+        chosen.click(timeout=8000)
+        page.wait_for_timeout(2000)
+        logging.info('%s: avanzamento prenotazione fase %d, URL %s', item['name'], step, page.url)
+        if diagnostic:
+            diagnostic_save(page, item['name'], 'dopo_avanti_' + str(step))
+        if calendar_ready(page):
+            return page
+    raise RuntimeError('Calendario non raggiunto dopo tre fasi: controllare diagnostica')
+
+
+def open_calendar(page, item, diagnostic=False):
+    """Apre il calendario partendo dalla pagina servizio, seguendo /it/book."""
     page.goto(item['url'], wait_until='domcontentloaded', timeout=45000)
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(2000)
+    dismiss_cookie_banner(page)
     if diagnostic:
         diagnostic_save(page, item['name'], 'pagina_servizio')
-    if page.locator(CALENDAR).count():
+    if calendar_ready(page):
         return page
-
-    # Il sito puo' aprire il modulo di prenotazione in un'altra scheda.
-    # Ispezioniamo il link e il risultato del click, mantenendo il nuovo Page.
-    candidate_selectors = [
-        'main a:has-text("Prenota appuntamento")',
-        'main button:has-text("Prenota appuntamento")',
-        'a:has-text("Prenota appuntamento")',
-        'button:has-text("Prenota appuntamento")',
-    ]
-    errors = []
-    for selector in candidate_selectors:
-        matches = page.locator(selector)
-        for index in range(min(matches.count(), 4)):
-            element = matches.nth(index)
-            try:
-                if not element.is_visible():
+    # Il link presente sulla pagina servizio porta spesso a /it/book,
+    # con l'ufficio gia' selezionato. Non usare link del footer.
+    if '/it/book' not in page.url:
+        possible = [
+            'main a:has-text("Prenota appuntamento")',
+            'main button:has-text("Prenota appuntamento")',
+            'a:has-text("Prenota appuntamento")',
+        ]
+        found = False
+        for selector in possible:
+            loc = page.locator(selector)
+            for i in range(min(loc.count(), 5)):
+                el = loc.nth(i)
+                try:
+                    if not el.is_visible():
+                        continue
+                    href = el.get_attribute('href')
+                    if href and '/it/book' in href:
+                        page.goto(urllib.parse.urljoin(page.url, href), wait_until='domcontentloaded', timeout=45000)
+                        found = True
+                        break
+                    old = list(page.context.pages)
+                    el.click(timeout=6000)
+                    page.wait_for_timeout(1000)
+                    newer = [p for p in page.context.pages if p not in old]
+                    if newer:
+                        page = newer[-1]
+                    found = True
+                    break
+                except Exception:
                     continue
-                # Non dare priorita' al link del footer quando e' disponibile
-                # il pulsante del contenuto principale.
-                href = element.get_attribute('href')
-                old_pages = list(page.context.pages)
-                if href and '/it/book' in href:
-                    target = urllib.parse.urljoin(page.url, href)
-                    page.goto(target, wait_until='domcontentloaded', timeout=45000)
-                else:
-                    element.click(timeout=8000)
-                page.wait_for_timeout(3000)
-                pages = [p for p in page.context.pages if not p.is_closed()]
-                new_pages = [p for p in pages if p not in old_pages]
-                candidates = new_pages + [page] + [p for p in pages if p is not page and p not in new_pages]
-                for candidate in candidates:
-                    try:
-                        candidate.wait_for_load_state('domcontentloaded', timeout=10000)
-                    except Exception:
-                        pass
-                    try:
-                        candidate.locator(CALENDAR).first.wait_for(state='visible', timeout=7000)
-                        logging.info('%s: calendario raggiunto su %s', item['name'], candidate.url)
-                        return candidate
-                    except Exception:
-                        if diagnostic:
-                            diagnostic_save(candidate, item['name'], 'dopo_click')
-                errors.append(selector + ': calendario non apparso; URL ' + page.url)
-            except Exception as exc:
-                errors.append(selector + ': ' + type(exc).__name__)
-    # Acquisisci prove utili anche se il click non e' riuscito.
-    diagnostic_save(page, item['name'], 'errore_navigazione')
-    logging.error('%s: tentativi navigazione: %s', item['name'], ' | '.join(errors)[:1500])
-    raise RuntimeError('Calendario non raggiunto: consultare screenshot e testo diagnostici')
+            if found:
+                break
+        if not found:
+            diagnostic_save(page, item['name'], 'errore_navigazione')
+            raise RuntimeError('Nessun pulsante di prenotazione trovato nella pagina servizio')
+    try:
+        page.wait_for_load_state('domcontentloaded', timeout=12000)
+        page.wait_for_timeout(1200)
+        dismiss_cookie_banner(page)
+        if calendar_ready(page):
+            return page
+        if '/it/book' not in page.url:
+            raise RuntimeError('Collegamento prenotazione non raggiunto: ' + page.url)
+        return advance_booking_steps(page, item, diagnostic)
+    except Exception:
+        diagnostic_save(page, item['name'], 'errore_navigazione')
+        raise
 
 
 def enabled_dates(page):
