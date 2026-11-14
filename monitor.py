@@ -159,11 +159,34 @@ def advance_booking_steps(page, item, diagnostic=False):
             raise RuntimeError('Fase prenotazione non riconosciuta: ' + stage_before)
 
         if stage_before == 'motivo':
-            radios = page.locator('input[type="radio"]')
-            if radios.count() and not page.locator('input[type="radio"]:checked').count():
-                raise RuntimeError('Motivo non selezionato: controllare il servizio')
-            # Dettagli potrebbero essere soggetti a validazione anche senza asterisco.
-            # Non inventiamo contenuti: la diagnostica rilevera' gli errori del modulo.
+            # Il sito presenta il motivo come voce testuale selezionabile,
+            # non necessariamente come input radio nativo. I radio dell'intera
+            # pagina includono controlli estranei al modulo.
+            full_name = item['name'].split(' - ', 1)[0].strip()
+            candidates_reason = page.locator('main').get_by_text(re.compile(re.escape(full_name), re.I))
+            chosen = False
+            for j in range(min(candidates_reason.count(), 12)):
+                candidate = candidates_reason.nth(j)
+                try:
+                    if not candidate.is_visible():
+                        continue
+                    label_text = candidate.inner_text(timeout=1200).strip()
+                    # Selettore rigoroso: non cliccare la voce di un altro istruttore.
+                    if full_name.casefold() not in label_text.casefold() or len(label_text) > 190:
+                        continue
+                    candidate.click(timeout=5500)
+                    page.wait_for_timeout(450)
+                    chosen = True
+                    logging.info('%s: selezionato motivo: %s', item['name'], label_text[:100])
+                    break
+                except Exception:
+                    continue
+            if not chosen:
+                if diagnostic:
+                    diagnostic_controls(page, item['name'], 'motivo_non_trovato_' + str(step))
+                raise RuntimeError('Motivo dell istruttore non cliccabile; consultare diagnostica')
+            # Il pulsante Avanti fara' verificare al sito la selezione.
+            # Non compilare il campo libero Dettagli con informazioni inventate.
         elif stage_before == 'ufficio':
             radios = page.locator('input[type="radio"]')
             if radios.count() and not page.locator('input[type="radio"]:checked').count():
