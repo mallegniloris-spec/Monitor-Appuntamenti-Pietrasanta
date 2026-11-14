@@ -1,23 +1,23 @@
-name: Controllo appuntamenti Pietrasanta
-'on':
+name: Monitor appuntamenti Pietrasanta - API
+on:
   schedule:
-    - cron: '7,22,37,52 * * * *'
+    - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
     inputs:
-      diagnostic:
-        description: 'Diagnostica senza notifiche (true / false)'
+      dry_run:
+        description: 'Solo verifica API, senza notifiche'
         required: false
         type: boolean
-        default: false
+        default: true
 permissions:
-  contents: read
+  contents: write
 concurrency:
-  group: pietrasanta-monitor
+  group: appointments-monitor
   cancel-in-progress: false
 jobs:
   controllo:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -26,36 +26,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
-      - run: pip install -r requirements.txt
-      - run: python -m playwright install --with-deps chromium
-      - name: Ripristina rilevazioni precedenti
-        uses: actions/cache/restore@v4
-        with:
-          path: stato.json
-          key: pietrasanta-stato-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            pietrasanta-stato-
-      - name: Esegui controllo o diagnostica
-        shell: bash
-        env:
-          DIAGNOSTIC: ${{ inputs.diagnostic }}
+      - name: Test logica offline
+        run: python monitor.py --test
+      - name: Controllo API
         run: |
-          if [ "$DIAGNOSTIC" = "true" ]; then
-            python monitor.py --diagnostic
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            python monitor.py --dry-run
           else
-            python monitor.py --once
+            python monitor.py
           fi
-      - name: Conserva stato
-        if: success() && inputs.diagnostic != true
-        uses: actions/cache/save@v4
-        with:
-          path: stato.json
-          key: pietrasanta-stato-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Scarica diagnostica
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: schermate-calendari
-          path: diagnostica/
-          retention-days: 3
+      - name: Salva stato sulla branch main
+        if: success() && (github.event_name == 'schedule' || inputs.dry_run == false)
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add state.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Aggiorna stato disponibilita'
+            git push
+          fi
