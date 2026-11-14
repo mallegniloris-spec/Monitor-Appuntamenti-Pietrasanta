@@ -1,0 +1,57 @@
+name: Controllo appuntamenti Pietrasanta
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: 'Produci screenshot e testo per collaudo (senza notifiche di slot)'
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  controllo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Ripristina stato rilevazioni
+        uses: actions/cache/restore@v4
+        with:
+          path: stato.json
+          key: pietrasanta-stato-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            pietrasanta-stato-
+      - name: Esegui controllo
+        run: |
+          if [ "${{ inputs.diagnostic }}" = "true" ]; then
+            python monitor.py --diagnostic
+          else
+            python monitor.py --once
+          fi
+      - name: Salva stato rilevazioni
+        if: success() && inputs.diagnostic != true
+        uses: actions/cache/save@v4
+        with:
+          path: stato.json
+          key: pietrasanta-stato-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Scarica diagnostica dalla pagina Actions
+        if: always() && inputs.diagnostic == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: schermate-calendari
+          path: |
+            diagnostica/
+            monitor.log
+          retention-days: 3
