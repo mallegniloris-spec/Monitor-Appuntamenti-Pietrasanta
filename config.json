@@ -1,41 +1,13 @@
 {
-  "interval_minutes": 15,
-  "operators": [
-    {
-      "name": "Riccardo Nastasi - SCIA",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/istruttoria-scia-con-riccardo-nastasi",
-      "enabled": true
-    },
-    {
-      "name": "Ilaria Sacchelli - SCIA e sanatorie",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/767",
-      "enabled": true
-    },
-    {
-      "name": "Matteo Genovesi - PDC e sanatorie",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/766",
-      "enabled": true
-    },
-    {
-      "name": "Maurizio Viviani - Edilizia residenziale",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/edilizia-residenziale-con-maurizio-viviani",
-      "enabled": true
-    },
-    {
-      "name": "Alessandro Dazzi - Edilizia e paesaggistica",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/edilizia-e-paesaggistica",
-      "enabled": true
-    },
-    {
-      "name": "Benedetta Matteini - Pianificazione urbanistica",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/1293",
-      "enabled": true
-    },
-    {
-      "name": "Caterina Caffarri - Pianificazione urbanistica",
-      "url": "https://www.comune.pietrasanta.lu.it/it/servizi/6051",
-      "enabled": true
-    }
-  ],
-  "months_ahead": 2
+  "months": 2,
+  "days_ahead": 45,
+  "services": [
+    {"name": "Riccardo Nastasi - SCIA", "risorsa_id": 1719, "servizio_id": 768, "minutes": 20, "enabled": true},
+    {"name": "Ilaria Sacchelli - SCIA e sanatorie", "risorsa_id": 1715, "servizio_id": 767, "minutes": 20, "enabled": true},
+    {"name": "Matteo Genovesi - PDC e sanatorie", "risorsa_id": 1714, "servizio_id": 766, "minutes": 20, "enabled": true},
+    {"name": "Maurizio Viviani - Edilizia residenziale", "risorsa_id": 1725, "servizio_id": 901, "minutes": 20, "enabled": true},
+    {"name": "Alessandro Dazzi - Edilizia e paesaggistica", "risorsa_id": 1710, "servizio_id": 764, "minutes": 20, "enabled": true},
+    {"name": "Ilaria Natucci - Attivita produttive", "risorsa_id": 1720, "servizio_id": 769, "minutes": 20, "enabled": true},
+    {"name": "Alessia Pardini - Edilizia e sanatorie", "risorsa_id": 1711, "servizio_id": 765, "minutes": 20, "enabled": true}
+  ]
 }
