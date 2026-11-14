@@ -91,6 +91,38 @@ def dismiss_cookie_banner(page):
     return False
 
 
+def wait_calendar_or_explain(page, item, diagnostic=False):
+    """Aspetta il calendario. Una pagina vuota NON significa zero disponibilita'."""
+    try:
+        page.locator(CALENDAR).first.wait_for(state='visible', timeout=18000)
+        return True
+    except Exception:
+        pass
+    try:
+        info = page.evaluate("""() => ({
+            url: location.href,
+            activeStep: [...document.querySelectorAll('[aria-selected=true], .mat-step-header[aria-current=step]')]
+                .map(e => (e.innerText || '').trim()).slice(0,10),
+            calendarCount: document.querySelectorAll('mat-calendar,.mat-calendar').length,
+            calendarDayCount: document.querySelectorAll('button.mat-calendar-body-cell').length,
+            visibleText: (document.querySelector('main')?.innerText || document.body.innerText).slice(0,2200),
+            iframeCount: document.querySelectorAll('iframe').length,
+            cookieBannerCount: document.querySelectorAll('[id*=cookiescript]').length
+        })""")
+        folder = ROOT / 'diagnostica'
+        folder.mkdir(exist_ok=True)
+        slug = re.sub('[^A-Za-z0-9_-]+', '_', item['name'])[:80]
+        (folder / (slug + '_calendario_assente.json')).write_text(
+            json.dumps(info, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception as exc:
+        logging.warning('%s: diagnostica calendario: %s', item['name'], type(exc).__name__)
+    if diagnostic:
+        diagnostic_save(page, item['name'], 'calendario_assente')
+        diagnostic_controls(page, item['name'], 'calendario_assente')
+    raise RuntimeError('Fase Data e orario raggiunta, ma calendario non caricato dopo 18 s. '
+                       'Non equivale a zero appuntamenti: controllare diagnostica calendario_assente.')
+
+
 def booking_stage(page):
     """Fase riconosciuta dal contenuto visibile, non dal riepilogo dei passi."""
     try:
@@ -101,6 +133,8 @@ def booking_stage(page):
             return 'motivo'
         if 'Scegli l’ufficio a cui vuoi richiedere l’appuntamento' in body or 'Scegli l\'ufficio a cui vuoi richiedere l\'appuntamento' in body:
             return 'ufficio'
+        if 'Appuntamenti disponibili' in body and 'Data e orario' in body:
+            return 'data_orario_senza_calendario'
         if 'Richiedente' in body and ('Nome*' in body or 'Cognome*' in body):
             return 'richiedente'
     except Exception:
@@ -153,6 +187,9 @@ def advance_booking_steps(page, item, diagnostic=False):
             diagnostic_save(page, item['name'], 'prenotazione_fase_' + str(step))
             diagnostic_controls(page, item['name'], 'fase_' + str(step))
         logging.info('%s: passaggio %d, fase %s', item['name'], step, stage_before)
+        if stage_before == 'data_orario_senza_calendario':
+            wait_calendar_or_explain(page, item, diagnostic)
+            return page
         if stage_before == 'richiedente':
             raise RuntimeError('Fase richiedente raggiunta senza calendario: nessun dato inserito')
         if stage_before not in ('ufficio','motivo'):
@@ -231,6 +268,9 @@ def advance_booking_steps(page, item, diagnostic=False):
         if calendar_ready(page):
             return page
         stage_after = booking_stage(page)
+        if stage_after == 'data_orario_senza_calendario':
+            wait_calendar_or_explain(page, item, diagnostic)
+            return page
         logging.info('%s: passaggio %d, da %s a %s', item['name'], step, stage_before, stage_after)
         if stage_after == stage_before:
             raise RuntimeError('Il pulsante Avanti non cambia fase ('+stage_before+'); analizzare *_controlli.json per errori di validazione')
@@ -356,6 +396,10 @@ def visible_times(page):
 
 def scan(browser, item, diagnostic=False, max_months=2):
     page = browser.new_page(locale='it-IT', timezone_id='Europe/Rome')
+    # Non raccoglie dati personali o token; conserva solo errori tecnici lato browser.
+    browser_issues = []
+    page.on('pageerror', lambda error: browser_issues.append('JS: ' + str(error)[:500]))
+    page.on('response', lambda response: browser_issues.append('HTTP ' + str(response.status) + ': ' + urllib.parse.urlsplit(response.url).path[:180]) if response.status >= 400 else None)
     try:
         page = open_calendar(page, item, diagnostic=diagnostic)
         if diagnostic:
@@ -393,6 +437,11 @@ def scan(browser, item, diagnostic=False, max_months=2):
         logging.info('%s: %d orari confermati, %d date selezionabili esaminate', item['name'], len(slots), len(dates_seen))
         return {'slots': sorted(slots), 'link': page.url, 'dates': len(dates_seen)}
     finally:
+        if diagnostic:
+            folder = ROOT / 'diagnostica'
+            folder.mkdir(exist_ok=True)
+            slug = re.sub('[^A-Za-z0-9_-]+', '_', item['name'])[:80]
+            (folder / (slug + '_errori_browser.txt')).write_text('\n'.join(browser_issues[:150]), encoding='utf-8')
         page.close()
 
 
