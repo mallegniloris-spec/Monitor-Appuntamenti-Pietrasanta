@@ -159,34 +159,54 @@ def advance_booking_steps(page, item, diagnostic=False):
             raise RuntimeError('Fase prenotazione non riconosciuta: ' + stage_before)
 
         if stage_before == 'motivo':
-            # Il sito presenta il motivo come voce testuale selezionabile,
-            # non necessariamente come input radio nativo. I radio dell'intera
-            # pagina includono controlli estranei al modulo.
+            # Il motivo e' un menu Angular Material (mat-select / mat-option),
+            # NON un testo da cliccare ripetutamente. L'overlay resta aperto
+            # quando il click precedente ha gia' selezionato l'opzione.
             full_name = item['name'].split(' - ', 1)[0].strip()
-            candidates_reason = page.locator('main').get_by_text(re.compile(re.escape(full_name), re.I))
             chosen = False
-            for j in range(min(candidates_reason.count(), 12)):
-                candidate = candidates_reason.nth(j)
+            selects = page.locator('mat-select, [role="combobox"]')
+            for j in range(min(selects.count(), 8)):
+                select = selects.nth(j)
                 try:
-                    if not candidate.is_visible():
+                    if not select.is_visible():
                         continue
-                    label_text = candidate.inner_text(timeout=1200).strip()
-                    # Selettore rigoroso: non cliccare la voce di un altro istruttore.
-                    if full_name.casefold() not in label_text.casefold() or len(label_text) > 190:
+                    # Un valore gia' selezionato non va cliccato di nuovo.
+                    current = (select.inner_text(timeout=1500) or '').strip()
+                    if full_name.casefold() in current.casefold():
+                        chosen = True
+                        logging.info('%s: motivo gia selezionato', item['name'])
+                        break
+                    select.click(timeout=3500)
+                    option = page.locator('[role="option"],mat-option').filter(has_text=re.compile(re.escape(full_name), re.I))
+                    if not option.count():
+                        page.keyboard.press('Escape')
                         continue
-                    candidate.click(timeout=5500)
-                    page.wait_for_timeout(450)
+                    target = option.first
+                    # Non si forza il click: deve essere una scelta reale.
+                    if target.get_attribute('aria-selected') == 'true':
+                        page.keyboard.press('Escape')
+                    else:
+                        target.click(timeout=4000)
+                    page.wait_for_timeout(350)
+                    # Chiude qualsiasi overlay rimasto aperto.
+                    if page.locator('.cdk-overlay-pane [role="listbox"]').count():
+                        page.keyboard.press('Escape')
                     chosen = True
-                    logging.info('%s: selezionato motivo: %s', item['name'], label_text[:100])
+                    logging.info('%s: motivo selezionato dal menu', item['name'])
                     break
-                except Exception:
-                    continue
+                except Exception as exc:
+                    logging.warning('%s: tentativo menu motivo %d: %s', item['name'], j, type(exc).__name__)
+                    try:
+                        page.keyboard.press('Escape')
+                    except Exception:
+                        pass
             if not chosen:
                 if diagnostic:
                     diagnostic_controls(page, item['name'], 'motivo_non_trovato_' + str(step))
-                raise RuntimeError('Motivo dell istruttore non cliccabile; consultare diagnostica')
-            # Il pulsante Avanti fara' verificare al sito la selezione.
-            # Non compilare il campo libero Dettagli con informazioni inventate.
+                    diagnostic_save(page, item['name'], 'motivo_non_trovato_' + str(step))
+                raise RuntimeError('Motivo non selezionato tramite mat-select; consultare diagnostica')
+            # Il campo libero Dettagli non viene compilato automaticamente.
+            dismiss_cookie_banner(page)
         elif stage_before == 'ufficio':
             radios = page.locator('input[type="radio"]')
             if radios.count() and not page.locator('input[type="radio"]:checked').count():
