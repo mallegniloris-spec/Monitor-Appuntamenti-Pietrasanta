@@ -8,7 +8,7 @@ on:
         description: 'Produci screenshot e testo per collaudo (senza notifiche di slot)'
         required: false
         type: boolean
-        default: false
+        default: true
 permissions:
   contents: read
 jobs:
