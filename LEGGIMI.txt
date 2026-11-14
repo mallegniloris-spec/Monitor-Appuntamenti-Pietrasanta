@@ -1,0 +1,67 @@
+MONITOR APPUNTAMENTI - COMUNE DI PIETRASANTA (PROTOTIPO CONFIGURABILE)
+
+STATO: NON ATTIVO FINO A CONFIGURAZIONE. Il calendario del Comune carica contenuti
+interattivi non leggibili dalla normale indicizzazione web. NON sono stati verificati
+i selettori degli slot, dunque non sarebbe corretto dichiararlo gia' funzionante.
+Questo programma e' predisposto per controllare per singolo istruttore, ma la
+navigazione e i selettori vanno tarati su una sessione reale del sito.
+
+1. INSTALLAZIONE SU WINDOWS
+   - Installare Python 3.12 o 3.13 da python.org (spuntare Add Python to PATH).
+   - Estrarre tutto il contenuto della cartella.
+   - Doppio clic su installa_windows.bat.
+   - Il computer dovra' restare acceso e collegato a Internet mentre il monitor gira.
+
+2. NOTIFICHE
+   - Aprire .env con Blocco note.
+   - Per Telegram: creare un bot tramite @BotFather, copiarne il token; inviare
+     /start al bot; ottenere il proprio chat_id (es. tramite API getUpdates).
+     Inserire TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID nel file .env.
+   - In alternativa compilare SMTP_HOST, SMTP_PORT, SMTP_USER,
+     SMTP_PASSWORD, EMAIL_TO. Per Gmail usare una password per app,
+     non la password ordinaria dell'account.
+   - Doppio clic su test_notifiche.bat; verificare l'arrivo dell'avviso.
+   - Non condividere .env: contiene credenziali segrete.
+
+3. CONFIGURAZIONE CALENDARIO - OBBLIGATORIA
+   - Aprire la pagina dell'istruttore nel browser e seguire il flusso fino al
+     calendario in cui il Comune visualizza gli orari.
+   - Aprire config.json nel Blocco note / VS Code.
+   - Per ogni istruttore da monitorare: impostare enabled: true.
+   - Selezionare i passaggi necessari per arrivare al calendario tramite 'steps'.
+     Esempi (adattare i nomi reali delle opzioni dopo verifica diretta):
+       "steps": [{"action":"click_button","name":"Prenota appuntamento"}]
+     oppure:
+       "steps": [{"action":"click_text","text":"Prenota appuntamento","exact":false},
+                 {"action":"click_text","text":"Riccardo Nastasi"}]
+     Azioni: click_text, click_button, click_css, select_label, wait_css, wait_ms.
+   - Impostare 'slot_selector' a un selettore CSS che prenda SOLO i bottoni
+     degli orari liberi (esempio ILLUSTRATIVO, non verificato: 
+     "button.time-slot:not([disabled])"). Non selezionare tutti i giorni
+     del calendario, altri pulsanti del sito o elementi nascosti.
+   - Opzionale: 'slot_pattern': regex per restringere le etichette agli orari,
+     per esempio: "\\b(?:[01]?\\d|2[0-3]):[0-5]\\d\\b".
+   - Aprire diagnostica.bat: browser visibile e screenshot/testi in
+     'diagnostica/' per capire se la pagina e' stata raggiunta correttamente.
+   - Confrontare il risultato con il calendario VISIBILE: se il monitor
+     interpreta in modo sbagliato, correggere i selettori prima di usarlo.
+   - Se non vi sono slot, la procedura puo' terminare senza risultati;
+     testare anche quando risultano orari disponibili.
+
+4. AVVIO
+   - Doppio clic su avvia_monitor.bat. Controllo ogni 15 minuti.
+   - Ogni nuova disponibilita' riconosciuta produce una notifica con istruttore,
+     orari e link alla pagina. La prenotazione resta manuale.
+   - I messaggi duplicati non vengono ripetuti finche' gli slot non scompaiono
+     e ricompaiono. Stato salvato in 'stato.json'.
+   - Non fare controlli troppo frequenti e rispettare eventuali limiti del sito.
+   - In caso di CAPTCHA/login: completare manualmente; NON aggirare le protezioni.
+
+LIMITI
+   - Il codice NON e' un servizio cloud: richiede un PC sempre acceso o un
+     server con browser Playwright configurato.
+   - Un cambiamento del sito puo' richiedere una nuova configurazione.
+   - Il caricamento del calendario puo' coinvolgere iframe o autenticazione:
+     in quel caso servono adattamenti specifici dopo ispezione dal browser.
+   - Non garantisce appuntamenti ne' la scoperta di ogni slot.
+   - Elenco istruttori preliminare, non necessariamente esaustivo.

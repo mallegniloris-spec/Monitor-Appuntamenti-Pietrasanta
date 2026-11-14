@@ -1,0 +1,12 @@
+{
+  "interval_minutes": 15,
+  "operators": [
+    {"name":"Riccardo Nastasi - SCIA", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/istruttoria-scia-con-riccardo-nastasi", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Ilaria Sacchelli - SCIA e sanatorie", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/767", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Matteo Genovesi - PDC e sanatorie", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/766", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Maurizio Viviani - Edilizia residenziale", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/edilizia-residenziale-con-maurizio-viviani", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Alessandro Dazzi - Edilizia e paesaggistica", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/edilizia-e-paesaggistica", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Benedetta Matteini - Pianificazione urbanistica", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/1293", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Caterina Caffarri - Pianificazione urbanistica", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/6051", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""}
+  ]
+}
