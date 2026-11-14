@@ -1,7 +1,7 @@
 {
   "interval_minutes": 15,
   "operators": [
-    {"name":"Riccardo Nastasi - SCIA", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/istruttoria-scia-con-riccardo-nastasi", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
+    {"name":"Riccardo Nastasi - SCIA", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/istruttoria-scia-con-riccardo-nastasi", "enabled":true,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
     {"name":"Ilaria Sacchelli - SCIA e sanatorie", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/767", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
     {"name":"Matteo Genovesi - PDC e sanatorie", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/766", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
     {"name":"Maurizio Viviani - Edilizia residenziale", "url":"https://www.comune.pietrasanta.lu.it/it/servizi/edilizia-residenziale-con-maurizio-viviani", "enabled":false,"steps":[],"slot_selector":"","slot_pattern":"","exclude_pattern":""},
