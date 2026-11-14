@@ -84,6 +84,51 @@ def split_intervals(data, min_duration, not_before, max_days):
     return sorted(set(results))
 
 
+def discover_planning(config):
+    """Find named staff via the same read-only actions used by the public booking UI.
+
+    Never guess resource IDs. Unmatched names are reported but not monitored.
+    """
+    office_id = int(config.get('planning_office_id', 8722))
+    offices = get_json('actions', {'id': office_id, 'action': 'preno_luogo_unita'})
+    if not isinstance(offices, list):
+        raise ValueError('Unexpected planning office locations response')
+    found = []
+    for office in offices:
+        office_location_id = office.get('unita_luogo')
+        if office_location_id is None:
+            continue
+        services = get_json('actions', {
+            'id': office_id, 'sportello': office_location_id,
+            'action': 'preno_risorse_servizio_by_luogo'})
+        if not isinstance(services, list):
+            raise ValueError('Unexpected planning resources response')
+        found.extend(services)
+    matches = []
+    for target in config.get('planning_staff', []):
+        if not target.get('enabled', True):
+            continue
+        full_name = str(target['name']).casefold().strip()
+        # Require full name as an uninterrupted phrase in the published service label.
+        candidates = [x for x in found if full_name in str(x.get('sportello_name', '')).casefold()]
+        ids = {(str(x.get('risorsa_id')), str(x.get('servizio'))) for x in candidates
+               if x.get('risorsa_id') is not None and x.get('servizio') is not None}
+        if len(ids) != 1:
+            logging.warning('Pianificazione - %s: %d matching resource/service pairs; not monitored',
+                            target['name'], len(ids))
+            continue
+        rid, sid = next(iter(ids))
+        matches.append({
+            'name': target['name'] + ' - Pianificazione urbanistica',
+            'risorsa_id': int(rid),
+            'servizio_id': int(sid),
+            'minutes': int(candidates[0].get('minuti_prenotabili') or 20),
+            'enabled': True})
+        logging.info('Pianificazione - %s: identified resource %s, service %s',
+                     target['name'], rid, sid)
+    return matches
+
+
 def read_state():
     try:
         d = json.loads(STATE.read_text(encoding='utf-8'))
@@ -129,6 +174,17 @@ def main():
     now = dt.datetime.now(TZ)
     errors = 0
     configured = {int(x['risorsa_id']): x for x in config['services'] if x.get('enabled', True)}
+    if config.get('planning_staff'):
+        try:
+            planning = discover_planning(config)
+            for service in planning:
+                rid = int(service['risorsa_id'])
+                if rid in configured:
+                    logging.warning('Pianificazione: resource %d already configured; keeping existing service', rid)
+                else:
+                    configured[rid] = service
+        except Exception as err:
+            logging.warning('Pianificazione: discovery unavailable (%s). Other staff will still be checked.', err)
     for i, (rid, local) in enumerate(configured.items()):
         name = local['name']
         try:
