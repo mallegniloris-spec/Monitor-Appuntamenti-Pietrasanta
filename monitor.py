@@ -1,220 +1,254 @@
-"""Monitor non invasivo di slot appuntamenti; configurazione per singolo istruttore.
-Non prenota, non aggira login/CAPTCHA; segnala soltanto slot positivamente riconosciuti.
+"""Monitor calendario Pietrasanta. Non effettua prenotazioni.
+Avvisa soltanto per date con orari effettivamente visibili e selezionabili.
 """
 import argparse
 import json
 import logging
 import os
 import re
-import smtplib
 import sys
-import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from email.message import EmailMessage
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
-CONFIG = ROOT / 'config.json'
-STATE = ROOT / 'stato.json'
 TZ = ZoneInfo('Europe/Rome')
-LOG = ROOT / 'monitor.log'
+CALENDAR = '.mat-calendar, mat-calendar'
+DAY = 'button.mat-calendar-body-cell'
+TIME_RX = re.compile(r'(?<!\d)(?:[01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)')
 
 
-def load_json(path, default):
+def load_json(file, fallback):
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        return json.loads(file.read_text(encoding='utf-8'))
     except FileNotFoundError:
-        return default
+        return fallback
 
 
-def save_json(path, obj):
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
+def write_json(file, data):
+    file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-def telegram(message):
+def notify(message):
     token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
-    chat = os.getenv('TELEGRAM_CHAT_ID', '').strip()
-    if not (token and chat):
+    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if not token or not chat_id:
+        logging.error('Token Telegram o Chat ID assente nei Secrets')
         return False
-    body = urllib.parse.urlencode({'chat_id':chat,'text':message, 'disable_web_page_preview':'true'}).encode()
-    with urllib.request.urlopen(urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMessage', data=body), timeout=20) as r:
-        result = json.load(r)
-        if not result.get('ok'):
-            raise RuntimeError('Telegram non ha confermato l\'invio')
-    return True
-
-
-def email(message):
-    host = os.getenv('SMTP_HOST','').strip()
-    user = os.getenv('SMTP_USER','').strip()
-    password = os.getenv('SMTP_PASSWORD','').strip()
-    recipient = os.getenv('EMAIL_TO','').strip()
-    if not all((host,user,password,recipient)):
-        return False
-    m = EmailMessage()
-    m['Subject'] = '[Pietrasanta] Nuova disponibilità appuntamento'
-    m['From'] = os.getenv('EMAIL_FROM',user)
-    m['To'] = recipient
-    m.set_content(message)
-    port = int(os.getenv('SMTP_PORT','465'))
-    if port == 465:
-        with smtplib.SMTP_SSL(host,port,timeout=20) as s:
-            s.login(user,password)
-            s.send_message(m)
-    else:
-        with smtplib.SMTP(host,port,timeout=20) as s:
-            s.starttls()
-            s.login(user,password)
-            s.send_message(m)
-    return True
-
-
-def send(message):
-    successes = []
-    errors = []
-    for name, func in [('Telegram', telegram), ('Email',email)]:
-        try:
-            if func(message): successes.append(name)
-        except Exception as exc:
-            errors.append(f'{name}: {exc}')
-    if errors:
-        logging.error('Errori invio: %s', '; '.join(errors))
-    return bool(successes)
-
-
-def run_steps(page, steps):
-    for i, step in enumerate(steps,1):
-        action = step.get('action','click_text')
-        timeout = int(step.get('timeout_ms', 12000))
-        logging.info('Passaggio %s: %s',i, action)
-        if action == 'click_text':
-            page.get_by_text(step['text'], exact=bool(step.get('exact',True))).first.click(timeout=timeout)
-        elif action == 'click_button':
-            page.get_by_role('button', name=step['name'], exact=bool(step.get('exact',True))).first.click(timeout=timeout)
-        elif action == 'click_css':
-            page.locator(step['selector']).first.click(timeout=timeout)
-        elif action == 'select_label':
-            page.get_by_label(step['label']).select_option(label=step['value'],timeout=timeout)
-        elif action == 'wait_css':
-            page.locator(step['selector']).first.wait_for(state=step.get('state','visible'),timeout=timeout)
-        elif action == 'wait_ms':
-            page.wait_for_timeout(min(int(step.get('ms',1000)),10000))
-        else:
-            raise ValueError(f'Azione non supportata: {action}')
-        page.wait_for_timeout(500)
-
-
-def check_operator(browser, item, diagnostic=False):
-    """Risultati solo da elementi CSS configurati; niente deduzioni da testo generico."""
-    page = browser.new_page()
-    name = item['name']
+    payload = urllib.parse.urlencode({'chat_id': chat_id, 'text': message,
+                                      'disable_web_page_preview': 'true'}).encode()
+    request = urllib.request.Request('https://api.telegram.org/bot' + token + '/sendMessage', data=payload)
     try:
-        page.goto(item['url'], wait_until='domcontentloaded', timeout=45000)
-        run_steps(page,item.get('steps',[]))
-        if diagnostic:
-            folder = ROOT / 'diagnostica'
-            folder.mkdir(exist_ok=True)
-            safe = re.sub(r'[^a-zA-Z0-9_-]','_',name)
-            page.screenshot(path=str(folder/f'{safe}.png'),full_page=True,timeout=10000)
-            (folder/f'{safe}.txt').write_text(page.locator('body').inner_text(timeout=10000)[:18000],encoding='utf-8')
-        selector = item.get('slot_selector','').strip()
-        if not selector:
-            logging.warning('%s: slot_selector non configurato. Nessun avviso inviato.',name)
-            return None
-        page.locator(selector).first.wait_for(state='attached',timeout=int(item.get('wait_slots_ms',10000)))
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return bool(json.load(response).get('ok'))
+    except Exception as exc:
+        logging.error('Notifica Telegram non riuscita: %s', type(exc).__name__)
+        return False
+
+
+def diagnostic_save(page, name, prefix):
+    folder = ROOT / 'diagnostica'
+    folder.mkdir(exist_ok=True)
+    slug = re.sub('[^A-Za-z0-9_-]+', '_', name)[:80]
+    path = folder / (slug + '_' + prefix)
+    try:
+        page.screenshot(path=str(path) + '.png', full_page=True, timeout=15000)
+        (folder / (slug + '_' + prefix + '.txt')).write_text(
+            'URL: ' + page.url + '\n' + page.locator('body').inner_text(timeout=10000)[:30000],
+            encoding='utf-8')
+        # DOM solo dei calendari e di possibili orari, senza dati inseriti in moduli.
+        html = page.evaluate('''() => [...document.querySelectorAll('mat-calendar, .mat-calendar, mat-radio-button, [role="radio"]')]
+            .slice(0, 80).map(e => e.outerHTML.slice(0, 15000)).join('\\n\\n')''')
+        (folder / (slug + '_' + prefix + '_elementi.html')).write_text(html, encoding='utf-8')
+    except Exception as exc:
+        logging.warning('Diagnostica parziale: %s', type(exc).__name__)
+
+
+def open_calendar(page, item):
+    page.goto(item['url'], wait_until='domcontentloaded', timeout=45000)
+    page.wait_for_timeout(1300)
+    if page.locator(CALENDAR).count():
+        return
+    # Apri il pulsante di prenotazione DEL servizio, non l'omonimo link nel footer.
+    for selector in [
+        'main a:has-text("Prenota appuntamento")',
+        'main button:has-text("Prenota appuntamento")',
+        'a:has-text("Prenota appuntamento")',
+        'button:has-text("Prenota appuntamento")',
+    ]:
         matches = page.locator(selector)
-        slots = []
-        for i in range(min(matches.count(), 200)):
-            el = matches.nth(i)
-            if not el.is_visible() or not el.is_enabled():
+        if not matches.count():
+            continue
+        try:
+            matches.first.click(timeout=8000)
+            page.locator(CALENDAR).first.wait_for(state='visible', timeout=15000)
+            return
+        except Exception:
+            if page.locator(CALENDAR).count():
+                return
+    # Nessun tentativo di indovinare orari da pagine puramente informative.
+    raise RuntimeError('Calendario non raggiunto: verificare URL e pulsante Prenota appuntamento')
+
+
+def enabled_dates(page):
+    """Legge date solo da pulsanti Angular Material abilitati; ignora giorni passati."""
+    today = datetime.now(TZ).date()
+    result = []
+    for button in page.locator(DAY).all():
+        if not button.is_visible() or not button.is_enabled():
+            continue
+        if button.get_attribute('aria-disabled') == 'true':
+            continue
+        classes = button.get_attribute('class') or ''
+        if 'mat-calendar-body-disabled' in classes:
+            continue
+        label = (button.get_attribute('aria-label') or '').strip()
+        # Per una data non riconoscibile evitiamo falsi positivi.
+        try:
+            from datetime import date
+            months = {'gennaio': 1, 'febbraio': 2, 'marzo': 3, 'aprile': 4,
+                      'maggio': 5, 'giugno': 6, 'luglio': 7, 'agosto': 8,
+                      'settembre': 9, 'ottobre': 10, 'novembre': 11, 'dicembre': 12}
+            d, m, y = label.lower().split()[:3]
+            day = date(int(y), months[m], int(d))
+        except (ValueError, KeyError):
+            logging.warning('Etichetta data sconosciuta: %s', label)
+            continue
+        if day >= today:
+            result.append((day.isoformat(), label))
+    return result
+
+
+def visible_times(page):
+    """Orari confermati da controlli interattivi FUORI dal calendario.
+    Un semplice orario testuale non e' prova di prenotabilita'.
+    """
+    selectors = [
+        'mat-radio-button:not([aria-disabled="true"])',
+        '[role="radio"]:not([aria-disabled="true"])',
+        'input[type="radio"]:not(:disabled)',
+        'button:not(.mat-calendar-body-cell):not([disabled]):not([aria-disabled="true"])',
+        'label[for]',
+    ]
+    found = set()
+    for selector in selectors:
+        for el in page.locator(selector).all()[:160]:
+            try:
+                if not el.is_visible() or not el.is_enabled():
+                    continue
+                if el.locator('xpath=ancestor::*[contains(@class,"mat-calendar")]').count():
+                    continue
+                value = (el.inner_text(timeout=800) or el.get_attribute('aria-label') or '').strip()
+                times = [m.group(0).replace('.', ':') for m in TIME_RX.finditer(value)]
+                # Evita identificare come slot un testo descrittivo ricco di orari.
+                if len(value) > 80 or len(times) != 1:
+                    continue
+                found.add(times[0])
+            except Exception:
                 continue
-            value = (el.inner_text(timeout=2000) or el.get_attribute('aria-label') or '').strip()
-            value = ' '.join(value.split())
-            if not value: continue
-            if item.get('slot_pattern') and not re.search(item['slot_pattern'],value,re.I):
-                continue
-            if item.get('exclude_pattern') and re.search(item['exclude_pattern'],value,re.I):
-                continue
-            slots.append(value)
-        return {'slots':sorted(set(slots)),'url':page.url}
+    return sorted(found)
+
+
+def scan(browser, item, diagnostic=False, max_months=2):
+    page = browser.new_page(locale='it-IT', timezone_id='Europe/Rome')
+    try:
+        open_calendar(page, item)
+        if diagnostic:
+            diagnostic_save(page, item['name'], 'inizio')
+        slots = set()
+        dates_seen = set()
+        for idx in range(max_months):
+            page.locator(CALENDAR).first.wait_for(state='visible', timeout=10000)
+            dates = enabled_dates(page)
+            logging.info('%s mese %d: %d giorni selezionabili', item['name'], idx+1, len(dates))
+            for iso, label in dates:
+                if iso in dates_seen:
+                    continue
+                dates_seen.add(iso)
+                try:
+                    # Cerca per data, non per posizione, per non cliccare il giorno errato.
+                    cell = page.locator(DAY + '[aria-label="' + label + '"]').first
+                    cell.click(timeout=4000)
+                    page.wait_for_timeout(900)
+                    times = visible_times(page)
+                    if diagnostic and times:
+                        diagnostic_save(page, item['name'], 'orari_' + iso)
+                    for hour in times:
+                        slots.add(iso + ' ' + hour)
+                except Exception as exc:
+                    logging.warning('%s: data %s non analizzabile: %s', item['name'], label, type(exc).__name__)
+            if idx < max_months - 1:
+                next_button = page.locator('button.mat-calendar-next-button').first
+                if not next_button.count() or not next_button.is_enabled():
+                    break
+                next_button.click(timeout=5000)
+                page.wait_for_timeout(500)
+        if diagnostic:
+            diagnostic_save(page, item['name'], 'fine')
+        logging.info('%s: %d orari confermati, %d date selezionabili esaminate', item['name'], len(slots), len(dates_seen))
+        return {'slots': sorted(slots), 'link': page.url, 'dates': len(dates_seen)}
     finally:
         page.close()
 
 
-def cycle(config, diagnostic=False):
-    state = load_json(STATE,{})
-    changed = False
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+def run(diagnostic=False):
+    config = load_json(ROOT / 'config.json', {})
+    operators = [op for op in config.get('operators', []) if op.get('enabled')]
+    if not operators:
+        logging.error('Attivare almeno un istruttore con enabled=true in config.json')
+        return 2
+    state_file = ROOT / 'stato.json'
+    state = load_json(state_file, {})
+    failures = 0
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
         try:
-            for item in config['operators']:
-                if not item.get('enabled',False): continue
-                name = item['name']
-                logging.info('Controllo %s',name)
+            for item in operators:
                 try:
-                    result = check_operator(browser,item,diagnostic)
-                    if result is None: continue
-                    slots = result['slots']
-                    previous = set(state.get(name,[]))
-                    newly = sorted(set(slots)-previous)
-                    logging.info('%s: %d possibili slot; %d nuovi',name,len(slots),len(newly))
-                    if newly and diagnostic:
-                        logging.info('%s: diagnostica, notifiche disabilitate',name)
-                    elif newly:
-                        message = (f'APPUNTAMENTI PIETRASANTA - NUOVA DISPONIBILITA\n'
-                                   f'Istruttore: {name}\n'
-                                   f'Orari rilevati: {", ".join(newly[:15])}\n'
-                                   f'Controllo: {datetime.now(TZ):%d/%m/%Y %H:%M}\n'
-                                   f'Prenota subito: {result["url"]}\n'
-                                   f'Gli slot possono esaurirsi prima della prenotazione.')
-                        if send(message):
-                            logging.info('Notifica inviata per %s',name)
-                            state[name]=slots
-                            changed=True
-                        else:
-                            logging.warning('Nessun canale di notifica configurato o invio fallito; ritento al prossimo ciclo')
-                    else:
-                        state[name]=slots
-                        changed=True
+                    result = scan(browser, item, diagnostic, int(config.get('months_ahead', 2)))
+                    latest = set(result['slots'])
+                    previous = set(state.get(item['name'], []))
+                    new = sorted(latest - previous)
+                    logging.info('%s: %s nuovi orari', item['name'], len(new))
+                    if diagnostic:
+                        continue
+                    if new:
+                        message = ('🔔 APPUNTAMENTO DISPONIBILE - PIETRASANTA\n'
+                                   'Istruttore: ' + item['name'] + '\n'
+                                   'Orari: ' + ', '.join(new[:15]) + '\n'
+                                   'Prenota: ' + result['link'] + '\n'
+                                   'Disponibilita soggetta a variazioni.')
+                        if not notify(message):
+                            failures += 1
+                            continue  # Non salvare gli slot se l'avviso non e' arrivato
+                    state[item['name']] = sorted(latest)
                 except Exception as exc:
-                    logging.exception('Controllo non riuscito per %s: %s',name,exc)
+                    failures += 1
+                    logging.exception('%s: errore di controllo: %s', item['name'], exc)
         finally:
             browser.close()
-    if changed: save_json(STATE,state)
-    elif not STATE.exists(): save_json(STATE,state)
+    if not diagnostic:
+        write_json(state_file, state)
+    return 1 if failures else 0
 
 
 def main():
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--once',action='store_true',help='Esegui un solo ciclo')
-    parser.add_argument('--diagnostic',action='store_true',help='Browser visibile, screenshot/testo in diagnostica/')
-    parser.add_argument('--test-notify',action='store_true',help='Invia test Telegram/email')
-    args=parser.parse_args()
-    logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s',handlers=[logging.StreamHandler(),logging.FileHandler(LOG,encoding='utf-8')])
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--once', action='store_true')
+    parser.add_argument('--diagnostic', action='store_true')
+    parser.add_argument('--test-notify', action='store_true')
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',
+                        handlers=[logging.StreamHandler(sys.stdout)])
     from dotenv import load_dotenv
-    load_dotenv(ROOT/'.env')
+    load_dotenv(ROOT / '.env')
     if args.test_notify:
-        ok=send('TEST - Monitor appuntamenti Comune di Pietrasanta: notifiche configurate correttamente.')
-        print('TEST INVIATO' if ok else 'NESSUN CANALE FUNZIONANTE: controllare .env e monitor.log')
-        return 0 if ok else 1
-    config=load_json(CONFIG,None)
-    if not config:
-        print('config.json mancante')
-        return 1
-    if not any(x.get('enabled',False) and (args.diagnostic or x.get('slot_selector')) for x in config.get('operators',[])):
-        print('CONFIGURAZIONE NECESSARIA: attivare un istruttore e (per il monitor reale) impostare slot_selector. Leggere GUIDA_CLOUD_TELEGRAM.md')
-        return 2
-    while True:
-        cycle(config,diagnostic=args.diagnostic)
-        if args.once or args.diagnostic: return 0
-        mins=max(10,int(config.get('interval_minutes',15)))
-        logging.info('Prossimo controllo fra %s minuti',mins)
-        time.sleep(mins*60)
+        return 0 if notify('✅ TEST Monitor Appuntamenti Pietrasanta: Telegram collegato correttamente.') else 1
+    return run(diagnostic=args.diagnostic)
 
 
 if __name__ == '__main__':
