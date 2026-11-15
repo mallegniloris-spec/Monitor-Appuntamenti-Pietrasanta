@@ -83,6 +83,15 @@ def split_intervals(data, min_duration, not_before, max_days):
         if isinstance(mask, str) and mask.isdecimal():
             mask = int(mask)
         if recurring:
+            if mask == 0:
+                # Municipium publishes special intervals with week=0 alongside
+                # ordinary weekly schedules (observed for Eugenia Bonatti).
+                # This does not identify a weekday. Never expand it to every
+                # day: doing so would invent appointment availability. The
+                # separate week=8 (Wednesday) schedule is processed normally.
+                logging.warning('Ignoring undetermined week=0 schedule for resource %s (%s to %s); no weekdays inferred',
+                                schedule.get('risorsaId', '?'), start_date, end_date)
+                continue
             if not isinstance(mask, int) or mask < 1 or mask > 127:
                 raise ValueError(f'Unrecognized weekly schedule bitmask: {mask!r} (type={type(mask).__name__})')
         no_days = schedule.get('noDays') or []
