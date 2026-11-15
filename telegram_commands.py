@@ -76,6 +76,7 @@ def fetch_availability():
             logging.warning('Planning staff discovery unavailable')
     lines = ['📅 Pietrasanta – verifica appuntamenti',
              'Controllo: ' + now.strftime('%d/%m/%Y %H:%M') + ' (ora italiana)', '']
+    exclusions = monitor.load_verified_exclusions()
     potential_count = 0
     failures = 0
     for rid, service in services.items():
@@ -88,6 +89,7 @@ def fetch_availability():
             })
             slots = monitor.split_intervals(
                 raw, int(service.get('minutes', 20)), now, int(cfg.get('days_ahead', 45)))
+            slots = monitor.exclude_verified(slots, rid, exclusions)
             potential_count += len(slots)
             if slots:
                 dates = [dt.datetime.fromisoformat(x).strftime('%d/%m %H:%M') for x in slots[:3]]
