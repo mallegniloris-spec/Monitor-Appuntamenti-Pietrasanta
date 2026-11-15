@@ -17,6 +17,8 @@ BOOKING = 'https://www.comune.pietrasanta.lu.it/it/book'
 TZ = ZoneInfo('Europe/Rome')
 ROOT = pathlib.Path(__file__).parent
 STATE = ROOT / 'state.json'
+EXCLUSIONS = ROOT / 'verified_exclusions.json'
+ENGINE_REVISION = 'v3.5-verified-exclusions'
 HEADERS = {'Accept': 'application/json', 'User-Agent': 'Pietrasanta-appointments-monitor/3.0 (read-only)'}
 
 
@@ -156,6 +158,40 @@ def split_intervals(data, min_duration, not_before, max_days):
     return sorted(set(results))
 
 
+def load_verified_exclusions():
+    """Specific time slots manually verified *absent* on the public booking UI.
+
+    Never infer recurrence from a manually observed missing slot. Missing file
+    means no additional exclusions. Invalid files fail closed.
+    """
+    if not EXCLUSIONS.exists():
+        return {}
+    doc = json.loads(EXCLUSIONS.read_text(encoding='utf-8'))
+    if not isinstance(doc, dict):
+        raise ValueError('Invalid verified_exclusions.json')
+    parsed = {}
+    for rid, entries in doc.items():
+        if not str(rid).isdigit() or not isinstance(entries, list):
+            raise ValueError('Invalid exclusion resource or entries')
+        parsed[str(rid)] = set()
+        for value in entries:
+            if not isinstance(value, str):
+                raise ValueError('Invalid exclusion date/time')
+            stamp = dt.datetime.fromisoformat(value)
+            if stamp.tzinfo is None or stamp.utcoffset() is None:
+                raise ValueError('Exclusion must include time zone')
+            parsed[str(rid)].add(stamp.isoformat())
+    return parsed
+
+
+def exclude_verified(slots, rid, excluded):
+    """Remove only individually observed missing slots, not a whole schedule."""
+    removed = set(slots) & excluded.get(str(rid), set())
+    if removed:
+        logging.warning('Resource %s: suppressed %d manually verified absent slot(s)', rid, len(removed))
+    return sorted(set(slots) - removed)
+
+
 def discover_planning(config):
     """Find named staff via the same read-only actions used by the public booking UI.
 
@@ -229,21 +265,29 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--test', action='store_true', help='Offline HAR fixture check only')
     parser.add_argument('--dry-run', action='store_true', help='Read live data, no notifications/state changes')
+    parser.add_argument('--rebaseline', action='store_true', help='Save current intervals without sending alerts; manual only')
     args = parser.parse_args()
     if args.test:
-        from tests.test_logic import test_har_sample, test_benedetta_excluded_slots
+        from tests.test_logic import test_har_sample, test_benedetta_excluded_slots, test_verified_exclusions
         test_har_sample()
         test_benedetta_excluded_slots()
+        test_verified_exclusions()
         print('Offline test OK: all occupied time slots correctly excluded')
         return 0
+    if args.rebaseline and args.dry_run:
+        parser.error('--rebaseline and --dry-run are mutually exclusive')
     config = json.loads((ROOT / 'config.json').read_text(encoding='utf-8'))
+    exclusions = load_verified_exclusions()
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-    if not args.dry_run and (not token or not chat_id):
+    if not args.dry_run and not args.rebaseline and (not token or not chat_id):
         print('Missing Telegram credentials in GitHub secrets', file=sys.stderr)
         return 2
     old = read_state()
     new = dict(old)
+    needs_migration = old.get('_engine_revision') != ENGINE_REVISION
+    if needs_migration and not args.dry_run:
+        logging.warning('New availability calculation: rebaseline all services without sending alerts on this run')
     now = dt.datetime.now(TZ)
     errors = 0
     configured = {int(x['risorsa_id']): x for x in config['services'] if x.get('enabled', True)}
@@ -263,9 +307,14 @@ def main():
         try:
             raw = get_json('prenotabile', {'rId': rid, 'data': int(time.time() * 1000), 'months': config.get('months', 2)})
             slots = split_intervals(raw, int(local.get('minutes', 20)), now, int(config.get('days_ahead', 45)))
+            slots = exclude_verified(slots, rid, exclusions)
             if args.dry_run:
                 preview = ', '.join(dt.datetime.fromisoformat(s).strftime('%d/%m %H:%M') for s in slots[:6])
                 logging.info('%s: %d possibili; primi orari: %s', name, len(slots), preview or 'nessuno')
+            if args.rebaseline or (needs_migration and not args.dry_run):
+                logging.info('%s: baseline updated with %d potential intervals; NO NOTIFICATIONS', name, len(slots))
+                new[str(rid)] = slots
+                continue
             prior = old.get(str(rid))
             if not isinstance(prior, list):
                 logging.info('%s: baseline %d possible intervals (no alerts on initial scan)', name, len(slots))
@@ -291,9 +340,11 @@ def main():
         if i < len(configured)-1:
             time.sleep(2)
     if not args.dry_run and errors == 0:
+        new['_engine_revision'] = ENGINE_REVISION
         save_state(new)
     elif not args.dry_run:
-        # Preserve successful independent services, but do not reset failed ones.
+        # Preserve successful independent services; do not mark migration complete
+        # unless every service was actually checked.
         save_state(new)
     return 1 if errors else 0
 
