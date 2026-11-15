@@ -41,7 +41,7 @@ jobs:
             python monitor.py
           fi
       - name: Leggi comandi Telegram
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: python telegram_commands.py
       - name: Salva storico e ultimo comando letto
         if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false))
