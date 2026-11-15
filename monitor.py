@@ -41,6 +41,29 @@ def datetime_part(seq):
     return dt.datetime(*map(int, seq[:5]), tzinfo=TZ)
 
 
+def parse_non_disponibile(entries):
+    """Parse Municipium blocked slot start times; fail closed on unknown formats."""
+    if entries is None:
+        return set()
+    if not isinstance(entries, list):
+        raise ValueError('Unrecognized nonDisponibile collection')
+    blocked = set()
+    for raw in entries:
+        if not isinstance(raw, str):
+            raise ValueError(f'Unrecognized nonDisponibile entry: {str(raw)[:80]!r}')
+        try:
+            if len(raw) == 12 and raw.isascii() and raw.isdecimal():
+                t = dt.datetime.strptime(raw, '%Y%m%d%H%M')
+            elif len(raw) == 14 and raw.isascii() and raw.isdecimal():
+                t = dt.datetime.strptime(raw, '%Y%m%d%H%M%S')
+            else:
+                raise ValueError
+            blocked.add(t.replace(tzinfo=TZ))
+        except ValueError:
+            raise ValueError(f'Unrecognized nonDisponibile entry: {raw[:80]!r}') from None
+    return blocked
+
+
 def split_intervals(data, min_duration, not_before, max_days):
     """Candidate intervals from dated or weekly schedule; never claim booking confirmed.
 
@@ -63,8 +86,9 @@ def split_intervals(data, min_duration, not_before, max_days):
     if duration <= 0:
         raise ValueError('Invalid slot duration')
     for schedule in data['orari']:
-        if schedule.get('indisponibile') is not False or schedule.get('nonDisponibile'):
+        if schedule.get('indisponibile') is not False:
             continue
+        blocked_slots = parse_non_disponibile(schedule.get('nonDisponibile'))
         try:
             start_date, end_date = date_part(schedule['inizio']), date_part(schedule['fine'])
             period_start, period_end = schedule['oraInizio'], schedule['oraFine']
@@ -123,7 +147,7 @@ def split_intervals(data, min_duration, not_before, max_days):
                 cur = beginning
                 while cur + dt.timedelta(minutes=duration) <= ending:
                     nxt = cur + dt.timedelta(minutes=duration)
-                    if cur > not_before and nxt <= cutoff:
+                    if cur > not_before and nxt <= cutoff and cur not in blocked_slots:
                         busy_count = sum(a < nxt and b > cur for a, b in busy)
                         if busy_count < capacity:
                             results.append(cur.isoformat())
@@ -207,8 +231,9 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Read live data, no notifications/state changes')
     args = parser.parse_args()
     if args.test:
-        from tests.test_logic import test_har_sample
+        from tests.test_logic import test_har_sample, test_benedetta_excluded_slots
         test_har_sample()
+        test_benedetta_excluded_slots()
         print('Offline test OK: all occupied time slots correctly excluded')
         return 0
     config = json.loads((ROOT / 'config.json').read_text(encoding='utf-8'))
