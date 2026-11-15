@@ -42,7 +42,13 @@ def datetime_part(seq):
 
 
 def split_intervals(data, min_duration, not_before, max_days):
-    """Conservative: only concrete, single-date schedules; never guess recurrence."""
+    """Candidate intervals from dated or weekly schedule; never claim booking confirmed.
+
+    Municipal 'week' is treated as a 7-bit day mask, Sunday=1,...Saturday=64;
+    this convention matches the HAR example week=32 on Friday 2026-11-20.
+    For a recurring schedule the day mask must be present and valid. An
+    ambiguous schedule raises rather than silently pretending no availability.
+    """
     if not isinstance(data, dict) or not isinstance(data.get('occupati'), list) or not isinstance(data.get('orari'), list):
         raise ValueError('Expected JSON occupati[] and orari[]')
     busy = []
@@ -53,34 +59,59 @@ def split_intervals(data, min_duration, not_before, max_days):
             raise ValueError('Unrecognized occupied interval')
     results = []
     cutoff = not_before + dt.timedelta(days=max_days)
+    duration = int(min_duration)
+    if duration <= 0:
+        raise ValueError('Invalid slot duration')
     for schedule in data['orari']:
         if schedule.get('indisponibile') is not False or schedule.get('nonDisponibile'):
             continue
         try:
             start_date, end_date = date_part(schedule['inizio']), date_part(schedule['fine'])
             period_start, period_end = schedule['oraInizio'], schedule['oraFine']
-            duration = int(min_duration)
             capacity = int(schedule.get('slot', 0))
-        except (KeyError, ValueError, TypeError):
+            start_time = dt.time(int(period_start[0]), int(period_start[1]))
+            end_time = dt.time(int(period_end[0]), int(period_end[1]))
+        except (KeyError, ValueError, TypeError, IndexError):
+            raise ValueError('Unrecognized published schedule')
+        if capacity < 1 or end_time <= start_time:
             continue
-        # A date range may represent recurrence; never infer weekly/day-of-week rules.
-        if start_date != end_date or capacity < 1 or duration < 1:
+        if end_date < start_date:
+            raise ValueError('Schedule ends before it starts')
+        recurring = start_date != end_date
+        mask = schedule.get('week')
+        if recurring:
+            if not isinstance(mask, int) or mask < 1 or mask > 127:
+                raise ValueError('Unrecognized weekly schedule bitmask')
+        no_days = schedule.get('noDays') or []
+        if not isinstance(no_days, list):
+            raise ValueError('Unrecognized excluded days')
+        excluded = set()
+        for x in no_days:
+            if isinstance(x, list) and len(x) >= 3:
+                excluded.add(date_part(x))
+            else:
+                # Unknown exception format: do not assert these days available.
+                raise ValueError('Unrecognized excluded-day value')
+        first = max(start_date, not_before.date())
+        last = min(end_date, cutoff.date())
+        if first > last:
             continue
-        if not (not_before.date() <= start_date <= cutoff.date()):
-            continue
-        try:
-            beginning = dt.datetime.combine(start_date, dt.time(int(period_start[0]), int(period_start[1])), TZ)
-            ending = dt.datetime.combine(end_date, dt.time(int(period_end[0]), int(period_end[1])), TZ)
-        except (ValueError, IndexError, TypeError):
-            continue
-        cur = beginning
-        while cur + dt.timedelta(minutes=duration) <= ending:
-            nxt = cur + dt.timedelta(minutes=duration)
-            if cur > not_before and nxt <= cutoff:
-                busy_count = sum(a < nxt and b > cur for a, b in busy)
-                if busy_count < capacity:
-                    results.append(cur.isoformat())
-            cur = nxt
+        current = first
+        while current <= last:
+            # Python weekday Mon=0..Sun=6 => Sunday bit 0, Monday bit 1.
+            weekday_bit = 1 << ((current.weekday() + 1) % 7)
+            if current not in excluded and (not recurring or mask & weekday_bit):
+                beginning = dt.datetime.combine(current, start_time, TZ)
+                ending = dt.datetime.combine(current, end_time, TZ)
+                cur = beginning
+                while cur + dt.timedelta(minutes=duration) <= ending:
+                    nxt = cur + dt.timedelta(minutes=duration)
+                    if cur > not_before and nxt <= cutoff:
+                        busy_count = sum(a < nxt and b > cur for a, b in busy)
+                        if busy_count < capacity:
+                            results.append(cur.isoformat())
+                    cur = nxt
+            current += dt.timedelta(days=1)
     return sorted(set(results))
 
 
@@ -190,18 +221,22 @@ def main():
         try:
             raw = get_json('prenotabile', {'rId': rid, 'data': int(time.time() * 1000), 'months': config.get('months', 2)})
             slots = split_intervals(raw, int(local.get('minutes', 20)), now, int(config.get('days_ahead', 45)))
+            if args.dry_run:
+                preview = ', '.join(dt.datetime.fromisoformat(s).strftime('%d/%m %H:%M') for s in slots[:6])
+                logging.info('%s: %d possibili; primi orari: %s', name, len(slots), preview or 'nessuno')
             prior = old.get(str(rid))
             if not isinstance(prior, list):
                 logging.info('%s: baseline %d possible intervals (no alerts on initial scan)', name, len(slots))
             else:
                 fresh = sorted(set(slots) - set(prior))
                 logging.info('%s: %d possible intervals, %d newly seen', name, len(slots), len(fresh))
-                for s in fresh:
-                    when = dt.datetime.fromisoformat(s)
-                    text = (f'Appuntamento POTENZIALMENTE disponibile - {name}\n'
-                            f'{when:%d/%m/%Y alle %H:%M}\n'
-                            f'Conferma subito sul calendario ufficiale: {BOOKING}\n'
-                            'La disponibilita puo cambiare prima della prenotazione.')
+                if fresh:
+                    sample = ', '.join(dt.datetime.fromisoformat(s).strftime('%d/%m %H:%M') for s in fresh[:5])
+                    extra = f' (+{len(fresh)-5} altri)' if len(fresh) > 5 else ''
+                    text = (f'Nuovi intervalli POTENZIALI - {name}\n'
+                            f'{len(fresh)} intervalli rilevati: {sample}{extra}\n'
+                            f'Verifica gli orari sul calendario ufficiale: {BOOKING}\n'
+                            'Non sono prenotazioni confermate.')
                     if not args.dry_run:
                         telegram_send(token, chat_id, text)
                     else:
