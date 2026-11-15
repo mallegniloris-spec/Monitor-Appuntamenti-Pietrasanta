@@ -68,3 +68,32 @@ def test_har_sample():
     # An isolated zero-mask recurring schedule cannot safely imply a day.
     assert split_intervals({'occupati': [], 'orari': [special]},
                            20, dt.datetime(2026, 11, 24, tzinfo=TZ), 2) == []
+
+
+def test_benedetta_excluded_slots():
+    # A published weekly schedule with specific excluded time slots.
+    schedule = {
+        'risorsaId': 2301, 'indisponibile': False,
+        'inizio': [2024, 11, 18], 'fine': [2026, 12, 31],
+        'week': 8, 'oraInizio': [11, 0], 'oraFine': [13, 0],
+        'slot': 1, 'noDays': [],
+        'nonDisponibile': ['202611251100', '202611251140'],
+    }
+    now = dt.datetime(2026, 11, 24, tzinfo=TZ)
+    actual = split_intervals({'occupati': [], 'orari': [schedule]}, 20, now, 2)
+    assert actual == [
+        '2026-11-25T11:20:00+01:00',
+        '2026-11-25T12:00:00+01:00',
+        '2026-11-25T12:20:00+01:00',
+        '2026-11-25T12:40:00+01:00',
+    ], actual
+    schedule['nonDisponibile'] = [f'20261125{h:02d}{m:02d}'
+        for h, m in [(11, 0), (11, 20), (11, 40), (12, 0), (12, 20), (12, 40)]]
+    assert split_intervals({'occupati': [], 'orari': [schedule]}, 20, now, 2) == []
+    schedule['nonDisponibile'].append('invalid')
+    try:
+        split_intervals({'occupati': [], 'orari': [schedule]}, 20, now, 2)
+    except ValueError as e:
+        assert 'nonDisponibile' in str(e)
+    else:
+        raise AssertionError('Malformed exclusion must fail closed')
