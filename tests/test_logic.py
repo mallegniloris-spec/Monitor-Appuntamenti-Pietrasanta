@@ -45,3 +45,26 @@ def test_har_sample():
         assert 'weekly schedule bitmask' in str(exc)
     else:
         raise AssertionError('Ambiguous recurrence must not be interpreted as no availability')
+
+    # Municipium Eugenia Bonatti: special week=0 interval alongside a
+    # recurring Wednesday=8 interval. week=0 must not become every day,
+    # and three free Wednesday slots must still be found.
+    wed = {
+        'risorsaId': 1721, 'indisponibile': False,
+        'inizio': [2026, 11, 18], 'fine': [2026, 12, 2],
+        'oraInizio': [11, 0], 'oraFine': [12, 20],
+        'slot': 1, 'week': 8, 'noDays': [],
+    }
+    special = dict(wed, week=0)
+    occupied = [{'inizio': [2026, 11, 25, 12, 0],
+                 'fine': [2026, 11, 25, 12, 20]}]
+    actual = split_intervals({'occupati': occupied, 'orari': [special, wed]},
+                             20, dt.datetime(2026, 11, 24, tzinfo=TZ), 2)
+    assert actual == [
+        '2026-11-25T11:00:00+01:00',
+        '2026-11-25T11:20:00+01:00',
+        '2026-11-25T11:40:00+01:00',
+    ], actual
+    # An isolated zero-mask recurring schedule cannot safely imply a day.
+    assert split_intervals({'occupati': [], 'orari': [special]},
+                           20, dt.datetime(2026, 11, 24, tzinfo=TZ), 2) == []
