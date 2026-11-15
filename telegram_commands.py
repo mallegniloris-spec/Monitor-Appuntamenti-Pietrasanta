@@ -54,9 +54,23 @@ def save_offset(offset):
     temp.replace(OFFSET_FILE)
 
 
-def is_command(text):
+def command_name(text):
     first = text.strip().split(maxsplit=1)[0].casefold() if text.strip() else ''
-    return first == '/controlla' or first.startswith('/controlla@')
+    name = first.split('@', 1)[0]
+    return name if name in ('/controlla', '/testavviso') else None
+
+
+def test_alert_message():
+    """Deliver an explicitly simulated notification, never an appointment claim."""
+    return (
+        '🧪 TEST NOTIFICA AUTOMATICA — Monitor Pietrasanta\n\n'
+        'Nuovi intervalli POTENZIALI - ISTRUTTORE DI PROVA\n'
+        '1 intervallo di ESEMPIO (data e ora fittizie)\n\n'
+        'Questa e solo una simulazione di consegna Telegram.\n'
+        'NESSUN appuntamento e stato trovato o prenotato.\n'
+        'Lo storico delle disponibilita non viene modificato.\n\n'
+        'Calendario ufficiale: ' + monitor.BOOKING
+    )
 
 
 def fetch_availability():
@@ -126,7 +140,8 @@ def run():
             save_offset(offset)
             continue
         text = msg.get('text', '')
-        if not isinstance(text, str) or not is_command(text):
+        command = command_name(text) if isinstance(text, str) else None
+        if command is None:
             save_offset(offset)
             continue
         sent_at = int(msg.get('date', 0))
@@ -135,12 +150,15 @@ def run():
             logging.info('Skipping stale command update %d', update_id)
             save_offset(offset)
             continue
-        logging.info('Replying to /controlla update %d', update_id)
-        try:
-            reply = fetch_availability()
-        except Exception:
-            logging.exception('Availability command failed')
-            reply = '⚠️ Controllo non riuscito: consulta GitHub Actions e riprova.'
+        logging.info('Replying to %s update %d', command, update_id)
+        if command == '/testavviso':
+            reply = test_alert_message()
+        else:
+            try:
+                reply = fetch_availability()
+            except Exception:
+                logging.exception('Availability command failed')
+                reply = '⚠️ Controllo non riuscito: consulta GitHub Actions e riprova.'
         telegram_api(token, 'sendMessage', {'chat_id': allowed_id, 'text': reply,
                                             'disable_web_page_preview': 'true'})
         save_offset(offset)
