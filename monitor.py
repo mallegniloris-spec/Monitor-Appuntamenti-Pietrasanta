@@ -79,9 +79,12 @@ def split_intervals(data, min_duration, not_before, max_days):
             raise ValueError('Schedule ends before it starts')
         recurring = start_date != end_date
         mask = schedule.get('week')
+        # Accept only unambiguous numeric encodings of the verified 7-bit mask.
+        if isinstance(mask, str) and mask.isdecimal():
+            mask = int(mask)
         if recurring:
             if not isinstance(mask, int) or mask < 1 or mask > 127:
-                raise ValueError('Unrecognized weekly schedule bitmask')
+                raise ValueError(f'Unrecognized weekly schedule bitmask: {mask!r} (type={type(mask).__name__})')
         no_days = schedule.get('noDays') or []
         if not isinstance(no_days, list):
             raise ValueError('Unrecognized excluded days')
@@ -89,9 +92,14 @@ def split_intervals(data, min_duration, not_before, max_days):
         for x in no_days:
             if isinstance(x, list) and len(x) >= 3:
                 excluded.add(date_part(x))
+            elif isinstance(x, str):
+                try:
+                    excluded.add(dt.date.fromisoformat(x[:10]))
+                except ValueError:
+                    raise ValueError(f'Unrecognized excluded-day value: {x!r}') from None
             else:
                 # Unknown exception format: do not assert these days available.
-                raise ValueError('Unrecognized excluded-day value')
+                raise ValueError(f'Unrecognized excluded-day value: {str(x)[:180]!r} (type={type(x).__name__})')
         first = max(start_date, not_before.date())
         last = min(end_date, cutoff.date())
         if first > last:
