@@ -97,3 +97,22 @@ def test_benedetta_excluded_slots():
         assert 'nonDisponibile' in str(e)
     else:
         raise AssertionError('Malformed exclusion must fail closed')
+
+
+
+def test_verified_exclusions():
+    from monitor import exclude_verified, load_verified_exclusions
+    original = [
+        '2026-11-25T11:00:00+01:00',
+        '2026-11-25T11:20:00+01:00',
+        '2026-11-25T11:40:00+01:00',
+        '2026-11-25T12:00:00+01:00',
+        '2026-12-02T12:00:00+01:00',
+    ]
+    blocked = load_verified_exclusions()
+    actual = exclude_verified(original, 1721, blocked)
+    assert len(actual) == 4, actual
+    assert '2026-11-25T12:00:00+01:00' not in actual
+    assert original[0] in actual and original[1] in actual and original[2] in actual
+    assert original[-1] in actual  # unverified future dates stay untouched
+    assert exclude_verified(original, 2301, blocked) == original
